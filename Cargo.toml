@@ -1,0 +1,75 @@
+[package]
+name = "defenders_clipboard"
+version = "1.0.0"
+edition = "2021"
+description = "Clipboard-based IOC triage and OSINT lookup tool for SOC analysts"
+
+[build-dependencies]
+winres = "0.1"
+
+[dependencies]
+# GUI framework
+eframe = { version = "0.27", default-features = true }
+
+# for image handling
+image = "0.25"
+rqrr = "0.7"
+
+
+# For file hash
+sha2 = "0.10"
+
+# Accesso alle API Win32
+
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Security_Cryptography"
+] }
+
+# Clipboard access (text read/write)
+arboard = "3.4"
+
+# Listener Sync Win32
+once_cell = "1.19"
+
+# for HTTP client 
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+
+# Json serialization/deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+#for base64 decoding
+base64 = "0.22"
+
+
+#for config parsing
+serde_yaml = "0.9"
+
+#for url decoding
+urlencoding = "2.1"
+
+# for ninja extractor
+regex = "1.10"
+
+#for browser
+open = "5.1"
+
+#for autorun
+winreg = "0.52"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# "unwind" (default): a panic in one of the many background threads (transformer
+# execution, DPAPI, HTTP calls) only kills that thread. With "abort" any panic,
+# anywhere, instantly kills the whole app and the in-memory clipboard history.
+panic = "unwind"
+strip = true

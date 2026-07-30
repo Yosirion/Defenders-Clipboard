@@ -1,0 +1,5 @@
+/target
+
+# Contiene le API key (cifrate DPAPI dopo il primo salvataggio, ma non fidarsi):
+# usare config.example.yml come template.
+/config.yml

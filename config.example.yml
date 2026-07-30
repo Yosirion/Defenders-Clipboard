@@ -1,0 +1,36 @@
+vt_api_key: ""
+abuse_api_key: ""
+hotkey:
+  ctrl: true
+  alt: true
+  shift: false
+  win: false
+  key: V
+transformers:
+  Hex Decode:
+    is_active: true
+  Extract IOCs:
+    is_active: true
+  🌐 AbuseIPDB:
+    is_active: true
+  API AbuseIPDB:
+    is_active: true
+  QR Decode:
+    is_active: true
+  🌐 Whois:
+    is_active: true
+  API VirusTotal:
+    is_active: true
+  🌐 UrlScan:
+    is_active: true
+  🌐 VirusTotal:
+    is_active: true
+  URL Decode:
+    is_active: true
+  Base64 Decode:
+    is_active: true
+  Smart Fang:
+    is_active: true
+window_width: 360.0
+window_height: 380.0
+history_limit: 10
