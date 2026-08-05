@@ -20,7 +20,7 @@ Each item in your history gets contextual one-click actions, shown only when rel
 
 | Tool | What it does |
 |---|---|
-| **Smart Fang** | Toggles an IOC between defanged (`hxxp://evil[.]com`) and refanged form. |
+| **Smart Fang** | Toggles an IOC between defanged (`hxxp[:]//evil[.]com`) and refanged form. |
 | **URL Decode** | Reverses percent-encoding. |
 | **Base64 Decode** | Decodes standard Base64; auto-detects UTF-16LE (common in obfuscated PowerShell). |
 | **Hex Decode** | Strips `0x`/`\x`/commas/spaces and decodes raw hex bytes. |

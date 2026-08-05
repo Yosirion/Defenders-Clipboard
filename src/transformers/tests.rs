@@ -30,12 +30,25 @@ fn error_of(result: Option<TransformerResult>) -> String {
 #[test]
 fn smart_fang_defangs_url_and_email() {
     let out = text_of(SmartFangTransformer.transform_text("https://evil.com/a@b.com", None, None));
-    assert_eq!(out, "hxxps://evil[.]com/a[at]b[.]com");
+    assert_eq!(out, "hxxps[:]//evil[.]com/a[at]b[.]com");
+}
+
+#[test]
+fn smart_fang_defangs_the_scheme_colon_too() {
+    let out = text_of(SmartFangTransformer.transform_text("http://evil.com", None, None));
+    assert_eq!(out, "hxxp[:]//evil[.]com");
 }
 
 #[test]
 fn smart_fang_refangs_defanged_input() {
     let out = text_of(SmartFangTransformer.transform_text("hxxps://evil[.]com", None, None));
+    assert_eq!(out, "https://evil.com");
+}
+
+#[test]
+fn smart_fang_refangs_bracketed_colon_form() {
+    // The current defang output brackets the scheme colon; refang must undo that too.
+    let out = text_of(SmartFangTransformer.transform_text("hxxps[:]//evil[.]com", None, None));
     assert_eq!(out, "https://evil.com");
 }
 
@@ -55,6 +68,7 @@ fn smart_fang_ignores_plain_text_without_iocs() {
 #[test]
 fn smart_fang_force_defang_is_directly_callable() {
     assert_eq!(SmartFangTransformer::force_defang("a.b@c.com"), "a[.]b[at]c[.]com");
+    assert_eq!(SmartFangTransformer::force_defang("http://a.com"), "hxxp[:]//a[.]com");
 }
 
 // =====================================================================
@@ -252,6 +266,14 @@ fn virustotal_web_transformer_builds_search_link_and_blocks_internal_ip() {
     assert!(url.starts_with("https://www.virustotal.com/gui/search/"));
     assert!(url.contains("8.8.8.8"));
     assert!(VirusTotalWebTransformer.transform_text("127.0.0.1", None, None).is_none());
+}
+
+#[test]
+fn virustotal_web_transformer_refuses_urls() {
+    // VT's URL search results page is behind a JS bot-check a plain link can't pass;
+    // URL lookups must go through the "API VirusTotal" tool instead.
+    assert!(!VirusTotalWebTransformer.is_supported_indicator(&IndicatorType::Url));
+    assert!(VirusTotalWebTransformer.transform_text("https://evil-domain.com/a", None, None).is_none());
 }
 
 #[test]

@@ -113,6 +113,7 @@ impl SmartFangTransformer {
             match ch {
                 '.' => out.push_str("[.]"),
                 '@' => out.push_str("[at]"),
+                ':' => out.push_str("[:]"),
                 _ => out.push(ch),
             }
         }
@@ -140,17 +141,20 @@ impl Transformer for SmartFangTransformer {
         if is_defanged {
             // Re-arm the IOC for SIEM queries
             let mut refanged = input.to_string();
-            
+
+            // Strip bracket obfuscation FIRST so the scheme-word swap below (which
+            // matches on a literal "://") can still find it once ":" is unbracketed.
+            refanged = refanged.replace("[:]", ":")
+                               .replace("[.]", ".")
+                               .replace("(.)", ".")
+                               .replace("{.}", ".");
+
             refanged = refanged.replace("hxxps://", "https://")
                                .replace("hxxp://", "http://")
                                .replace("HXXPS://", "HTTPS://")
                                .replace("HXXP://", "HTTP://")
                                .replace("h**ps://", "https://")
                                .replace("h**p://", "http://");
-
-            refanged = refanged.replace("[.]", ".")
-                               .replace("(.)", ".")
-                               .replace("{.}", ".");
 
             refanged = refanged.replace("[at]", "@")
                                .replace("[AT]", "@")
@@ -484,14 +488,20 @@ impl Transformer for VirusTotalWebTransformer {
     fn short_name(&self) -> &str { "🌐 VT" }
     fn button_width(&self) -> f32 { 70.0 }
     fn requires_external_lookup(&self) -> bool { true } // pivots to the public VirusTotal website
-    
+
+    // VirusTotal's URL search results page is gated behind a JS bot-check that a
+    // plain browser pivot can't pass (unlike its hash/domain/IP search pages).
+    // URL indicators can still be checked via the "API VirusTotal" tool instead.
     fn is_supported_indicator(&self, indicator: &IndicatorType) -> bool {
-        *indicator != IndicatorType::Unknown
+        *indicator != IndicatorType::Unknown && *indicator != IndicatorType::Url
     }
-    
+
     fn transform_text(&self, input: &str,_vt_key: Option<&str>, _abuse_key: Option<&str>) -> Option<TransformerResult> {
         let kind = crate::api::classify_indicator(input);
-        if kind != crate::api::IndicatorType::Unknown && kind != crate::api::IndicatorType::InternalIp {
+        if kind != crate::api::IndicatorType::Unknown
+            && kind != crate::api::IndicatorType::InternalIp
+            && kind != crate::api::IndicatorType::Url
+        {
             let encoded = urlencoding::encode(input);
             return Some(TransformerResult::OpenBrowser(format!("https://www.virustotal.com/gui/search/{}", encoded)));
         }

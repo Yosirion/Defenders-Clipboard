@@ -31,7 +31,7 @@ fn manager_smart_fang_round_trip_via_lookup_by_name() {
     let smart_fang = find(&mgr, "Smart Fang");
 
     match smart_fang.transform_text("https://evil.com", None, None) {
-        Some(TransformerResult::Text(s)) => assert_eq!(s, "hxxps://evil[.]com"),
+        Some(TransformerResult::Text(s)) => assert_eq!(s, "hxxps[:]//evil[.]com"),
         other => panic!("unexpected result: {}", other.is_some()),
     }
 }

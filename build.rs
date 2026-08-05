@@ -7,8 +7,8 @@ fn main() -> io::Result<()> {
         res.set("FileDescription", "Defenders Clipboard - Clipboard-based IOC triage and OSINT lookup tool for SOC analysts");
         res.set("ProductName", "Defenders Clipboard");
         res.set("OriginalFilename", "defenders_clipboard.exe");
-        res.set("ProductVersion", "1.0.0.0");
-        res.set("FileVersion", "1.0.0.0");
+        res.set("ProductVersion", "1.0.1.0");
+        res.set("FileVersion", "1.0.1.0");
         res.set_manifest(r#"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
