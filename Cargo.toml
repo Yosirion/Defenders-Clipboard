@@ -1,6 +1,6 @@
 [package]
 name = "defenders_clipboard"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 description = "Clipboard-based IOC triage and OSINT lookup tool for SOC analysts"
 
@@ -60,6 +60,9 @@ regex = "1.10"
 
 #for browser
 open = "5.1"
+
+# for parsing wrapped (safe link) URLs
+url = "2"
 
 #for autorun
 winreg = "0.52"

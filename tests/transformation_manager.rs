@@ -17,7 +17,7 @@ fn manager_registers_all_expected_transformers_with_unique_names() {
     let mgr = TransformationManager::new();
     let names: Vec<&str> = mgr.transformers.iter().map(|t| t.name()).collect();
 
-    assert_eq!(names.len(), 12);
+    assert_eq!(names.len(), 13);
 
     let mut sorted = names.clone();
     sorted.sort_unstable();
@@ -34,6 +34,30 @@ fn manager_smart_fang_round_trip_via_lookup_by_name() {
         Some(TransformerResult::Text(s)) => assert_eq!(s, "hxxps[:]//evil[.]com"),
         other => panic!("unexpected result: {}", other.is_some()),
     }
+}
+
+#[test]
+fn manager_unwraps_safe_links_and_only_offers_the_button_when_one_is_present() {
+    let mgr = TransformationManager::new();
+    let unwrap = find(&mgr, "Unwrap Safe Links");
+    let wrapped = "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fevil-domain.com%2Fa&data=x";
+
+    assert!(unwrap.is_applicable_to_text(wrapped));
+    assert!(!unwrap.is_applicable_to_text("https://evil-domain.com/a"));
+    match unwrap.transform_text(wrapped, None, None) {
+        Some(TransformerResult::Text(s)) => assert_eq!(s, "https://evil-domain.com/a"),
+        other => panic!("unexpected result: {}", other.is_some()),
+    }
+}
+
+#[test]
+fn manager_fang_button_label_follows_the_content() {
+    let mgr = TransformationManager::new();
+    let fang = find(&mgr, "Smart Fang");
+
+    assert_eq!(fang.short_name_for_text("https://evil.com"), "Defang");
+    assert_eq!(fang.short_name_for_text("hxxps[:]//evil[.]com"), "Refang");
+    assert_eq!(fang.short_name_for_text("plain text"), "Fang");
 }
 
 #[test]

@@ -71,6 +71,69 @@ fn smart_fang_force_defang_is_directly_callable() {
     assert_eq!(SmartFangTransformer::force_defang("http://a.com"), "hxxp[:]//a[.]com");
 }
 
+#[test]
+fn smart_fang_label_says_defang_for_armed_iocs() {
+    assert_eq!(SmartFangTransformer.short_name_for_text("http://evil-domain.com"), "Defang");
+    assert_eq!(SmartFangTransformer.short_name_for_text("evil-domain.com"), "Defang");
+    assert_eq!(SmartFangTransformer.short_name_for_text("user@evil-domain.com"), "Defang");
+}
+
+#[test]
+fn smart_fang_label_says_refang_for_defanged_iocs() {
+    assert_eq!(SmartFangTransformer.short_name_for_text("hxxp[:]//evil-domain[.]com"), "Refang");
+}
+
+#[test]
+fn smart_fang_label_falls_back_to_neutral_name_without_iocs() {
+    assert_eq!(SmartFangTransformer.short_name_for_text("just some plain text"), "Fang");
+}
+
+#[test]
+fn smart_fang_label_always_matches_what_the_click_does() {
+    // The label is derived from the same evaluation the click runs, so they can't drift apart.
+    for input in ["http://a.com", "hxxp[:]//a[.]com", "plain text", "a@b.com", "x[.]y"] {
+        let label = SmartFangTransformer.short_name_for_text(input).into_owned();
+        let result = SmartFangTransformer.transform_text(input, None, None);
+        match label.as_str() {
+            "Defang" => assert_eq!(text_of(result), SmartFangTransformer::force_defang(input)),
+            "Refang" => assert_eq!(text_of(result), SmartFangTransformer::force_refang(input)),
+            _ => assert!(result.is_none(), "neutral label but click did something for {input:?}"),
+        }
+    }
+}
+
+#[test]
+fn other_transformers_keep_their_static_label() {
+    assert_eq!(UrlDecodeTransformer.short_name_for_text("anything%20here"), "URL Dec");
+}
+
+// =====================================================================
+// Unwrap Safe Links
+// =====================================================================
+#[test]
+fn safelink_unwrap_cleans_a_wrapped_url() {
+    let wrapped = "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fevil-domain.com%2Fa&data=x";
+    assert_eq!(text_of(SafeLinkUnwrapTransformer.transform_text(wrapped, None, None)), "https://evil-domain.com/a");
+}
+
+#[test]
+fn safelink_unwrap_is_only_offered_when_a_wrapped_link_is_present() {
+    let wrapped = "https://nam12.safelinks.protection.outlook.com/?url=https%3A%2F%2Fevil-domain.com%2Fa&data=x";
+    assert!(SafeLinkUnwrapTransformer.is_applicable_to_text(wrapped));
+    assert!(!SafeLinkUnwrapTransformer.is_applicable_to_text("https://evil-domain.com/a"));
+    assert!(!SafeLinkUnwrapTransformer.is_applicable_to_text("plain text"));
+}
+
+#[test]
+fn safelink_unwrap_returns_none_when_nothing_to_unwrap() {
+    assert!(SafeLinkUnwrapTransformer.transform_text("https://evil-domain.com/a", None, None).is_none());
+}
+
+#[test]
+fn safelink_unwrap_works_locally_and_is_not_an_external_lookup() {
+    assert!(!SafeLinkUnwrapTransformer.requires_external_lookup());
+}
+
 // =====================================================================
 // URL Decode
 // =====================================================================
@@ -319,7 +382,7 @@ fn urlscan_transformer_ignores_hashes() {
 // TransformationManager factory
 // =====================================================================
 #[test]
-fn transformation_manager_registers_exactly_twelve_transformers() {
+fn transformation_manager_registers_exactly_thirteen_transformers() {
     let mgr = TransformationManager::new();
-    assert_eq!(mgr.transformers.len(), 12);
+    assert_eq!(mgr.transformers.len(), 13);
 }

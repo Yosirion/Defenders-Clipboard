@@ -34,3 +34,4 @@ transformers:
 window_width: 360.0
 window_height: 380.0
 history_limit: 10
+open_at_cursor: true

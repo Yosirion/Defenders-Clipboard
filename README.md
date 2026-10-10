@@ -8,7 +8,7 @@ Written in Rust, using `eframe`/`egui` for the UI and native Win32 APIs for clip
 
 - **Event-driven clipboard monitoring** — hooks `WM_CLIPBOARDUPDATE`, no polling.
 - **In-memory history only** — clipboard content is never written to disk; closing the app clears it.
-- **Global hotkey** (default `Ctrl+Alt+V`) to summon the UI from anywhere, plus a system tray icon.
+- **Global hotkey** (default `Ctrl+Alt+V`) to summon the UI from anywhere, plus a system tray icon. The window opens under the mouse pointer, on whichever monitor it is (kept inside the work area); a setting switches it back to the center of the primary monitor.
 - **Skips reputation lookups for private/internal IPs** (RFC 1918, loopback, link-local, IPv4 and IPv6) — there's no reputation data for an address that was never publicly routable.
 - **Encrypted API keys at rest** — VirusTotal/AbuseIPDB keys are encrypted with Windows DPAPI, tied to your Windows user profile.
 - **On-the-fly file hashing** — copy a file in Explorer and its SHA-256 is computed and added to history (files > 100 MB are skipped).
@@ -20,7 +20,8 @@ Each item in your history gets contextual one-click actions, shown only when rel
 
 | Tool | What it does |
 |---|---|
-| **Smart Fang** | Toggles an IOC between defanged (`hxxp[:]//evil[.]com`) and refanged form. |
+| **Smart Fang** | Toggles an IOC between defanged (`hxxp[:]//evil[.]com`) and refanged form. The button reads **Defang** on armed IoCs and **Refang** on already-defanged ones. |
+| **Unwrap Safe Links** | Replaces "safe link" wrappers with the original URL (Microsoft Safe Links, Proofpoint URL Defense v1/v2/v3, Barracuda, Check Point, Cisco, Sophos). Only shown when the text contains such a link; works on a bare link or on a whole pasted email. Mimecast and Forcepoint can't be unwrapped offline (opaque/compressed tokens). |
 | **URL Decode** | Reverses percent-encoding. |
 | **Base64 Decode** | Decodes standard Base64; auto-detects UTF-16LE (common in obfuscated PowerShell). |
 | **Hex Decode** | Strips `0x`/`\x`/commas/spaces and decodes raw hex bytes. |
@@ -69,6 +70,7 @@ Runs unit tests co-located with each module (`src/<module>/tests.rs`) plus integ
 - [`src/app.rs`](src/app.rs) — application state, `egui` UI, config load/save, DPAPI encryption.
 - [`src/transformers.rs`](src/transformers.rs) — the `Transformer` trait and all decoding/OSINT plugins (strategy pattern; adding a new tool doesn't require touching the UI).
 - [`src/api.rs`](src/api.rs) — indicator classification and the VirusTotal/AbuseIPDB HTTP clients, with an in-memory result cache.
+- [`src/safelinks.rs`](src/safelinks.rs) — pure logic that unwraps safe-link/click-protection URLs back to the original destination.
 - [`src/events.rs`](src/events.rs) — message types passed between the GUI thread and background workers.
 
 ## Extending: adding a new transformer
@@ -109,6 +111,8 @@ The tool system uses a Strategy pattern specifically so that new tools never req
     | `supports_image` / `supports_text` | text-only | your tool works on pasted images instead (see `QrDecodeTransformer`) |
     | `button_width` | `60.0` | your `short_name` needs more room |
     | `is_supported_indicator` | always shown | your tool only makes sense for certain indicator types (e.g. `WhoisTransformer` only shows for `Ip`/`Domain`) |
+    | `is_applicable_to_text` | always shown | your tool should only appear when the specific text has something for it to do (e.g. `SafeLinkUnwrapTransformer` needs a safe link) |
+    | `short_name_for_text` | `short_name` | the button label should reflect what a click will do for that text (e.g. Fang → Defang / Refang) |
     | `requires_external_lookup` | `false` | **your tool queries a public data source** — this is what hides it automatically for private/internal IPs, since there's no reputation data to fetch for those |
 
 4. **Register it** in `TransformationManager::new()`:

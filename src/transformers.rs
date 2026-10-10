@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
@@ -56,6 +57,14 @@ pub trait Transformer: Send + Sync {
     /// if the indicator is irrelevant (e.g., hiding Whois for Hashes).
     fn is_supported_indicator(&self, _indicator: &IndicatorType) -> bool { true }
 
+    /// Content-aware visibility for text payloads: return `false` to hide the button
+    /// for this specific text (e.g. "Unwrap" only makes sense if a safe link is present).
+    fn is_applicable_to_text(&self, _input: &str) -> bool { true }
+
+    /// Button label for a given text payload. Defaults to `short_name`; override it when
+    /// the label should reflect what a click will do (e.g. Fang -> Defang / Refang).
+    fn short_name_for_text(&self, _input: &str) -> Cow<'_, str> { Cow::Borrowed(self.short_name()) }
+
     /// Whether this tool needs to query an external, public data source.
     /// Internal/private IP indicators are hidden from these tools not to
     /// prevent a leak, but because a private address simply isn't present
@@ -74,6 +83,7 @@ impl TransformationManager {
             transformers: vec![
                 // Data Modifiers & Decoders
                 Box::new(SmartFangTransformer),
+                Box::new(SafeLinkUnwrapTransformer),
                 Box::new(UrlDecodeTransformer),
                 Box::new(Base64DecodeTransformer),
                 Box::new(HexDecodeTransformer),
@@ -99,6 +109,15 @@ impl TransformationManager {
 // ==========================================
 pub struct SmartFangTransformer;
 
+/// What a click on the Fang button will do for a given text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FangAction {
+    /// The text holds active (armed) IoCs: they will be defanged.
+    Defang,
+    /// The text is already defanged: it will be re-armed.
+    Refang,
+}
+
 impl SmartFangTransformer {
     /// Universally defangs a string, making it safe to click.
     pub fn force_defang(input: &str) -> String {
@@ -119,66 +138,95 @@ impl SmartFangTransformer {
         }
         out
     }
+
+    /// Re-arms a defanged string (the reverse of `force_defang`, plus other common conventions).
+    pub fn force_refang(input: &str) -> String {
+        // Strip bracket obfuscation FIRST so the scheme-word swap below (which
+        // matches on a literal "://") can still find it once ":" is unbracketed.
+        let mut refanged = input.replace("[:]", ":")
+                                .replace("[.]", ".")
+                                .replace("(.)", ".")
+                                .replace("{.}", ".");
+
+        refanged = refanged.replace("hxxps://", "https://")
+                           .replace("hxxp://", "http://")
+                           .replace("HXXPS://", "HTTPS://")
+                           .replace("HXXP://", "HTTP://")
+                           .replace("h**ps://", "https://")
+                           .replace("h**p://", "http://");
+
+        refanged.replace("[at]", "@")
+                .replace("[AT]", "@")
+                .replace("(at)", "@")
+                .replace("(AT)", "@")
+                .replace("{@}", "@")
+                .replace("[@]", "@")
+    }
+
+    fn looks_defanged(input: &str) -> bool {
+        let lower = input.to_lowercase();
+        lower.contains("hxxp")
+            || input.contains("[.]")
+            || input.contains("(.)")
+            || input.contains("{.}")
+            || lower.contains("[at]")
+            || lower.contains("(at)")
+            || lower.contains("{@}")
+            || input.contains("[@]")
+    }
+
+    /// Decides what the button would do for `input`, and the resulting text.
+    /// `None` when there is nothing to change (no IoC-looking content).
+    pub fn evaluate(input: &str) -> Option<(FangAction, String)> {
+        if Self::looks_defanged(input) {
+            // Re-arm the IOC for SIEM queries
+            let refanged = Self::force_refang(input);
+            return (refanged != input).then_some((FangAction::Refang, refanged));
+        }
+
+        // Text is active: only worth defanging if it can hold an IoC.
+        if !input.contains('.') && !input.contains('@') && !input.to_lowercase().contains("http") {
+            return None;
+        }
+        let defanged = Self::force_defang(input);
+        (defanged != input).then_some((FangAction::Defang, defanged))
+    }
 }
 
 impl Transformer for SmartFangTransformer {
     fn name(&self) -> &str { "Smart Fang" }
     fn short_name(&self) -> &str { "Fang" }
-    
-    fn transform_text(&self, input: &str,_vt_key: Option<&str>, _abuse_key: Option<&str>) -> Option<TransformerResult> {
-        let lower = input.to_lowercase();
-        
-        // CHECK REFANG: Is the text already defanged?
-        let is_defanged = lower.contains("hxxp") 
-                       || input.contains("[.]") 
-                       || input.contains("(.)") 
-                       || input.contains("{.}") 
-                       || lower.contains("[at]") 
-                       || lower.contains("(at)") 
-                       || lower.contains("{@}") 
-                       || input.contains("[@]");
 
-        if is_defanged {
-            // Re-arm the IOC for SIEM queries
-            let mut refanged = input.to_string();
-
-            // Strip bracket obfuscation FIRST so the scheme-word swap below (which
-            // matches on a literal "://") can still find it once ":" is unbracketed.
-            refanged = refanged.replace("[:]", ":")
-                               .replace("[.]", ".")
-                               .replace("(.)", ".")
-                               .replace("{.}", ".");
-
-            refanged = refanged.replace("hxxps://", "https://")
-                               .replace("hxxp://", "http://")
-                               .replace("HXXPS://", "HTTPS://")
-                               .replace("HXXP://", "HTTP://")
-                               .replace("h**ps://", "https://")
-                               .replace("h**p://", "http://");
-
-            refanged = refanged.replace("[at]", "@")
-                               .replace("[AT]", "@")
-                               .replace("(at)", "@")
-                               .replace("(AT)", "@")
-                               .replace("{@}", "@")
-                               .replace("[@]", "@");
-
-            if refanged != input {
-                return Some(TransformerResult::Text(refanged));
-            }
-        } else {
-            // CHECK DEFANG: Text is active, needs to be disarmed
-            if !input.contains('.') && !input.contains('@') && !lower.contains("http") { 
-                return None; 
-            }
-
-            let defanged = Self::force_defang(input);
-
-            if defanged != input {
-                return Some(TransformerResult::Text(defanged));
-            }
+    // The button says what it will do: "Defang" on armed IoCs, "Refang" on defanged
+    // ones, and the neutral "Fang" when there is nothing to change.
+    fn short_name_for_text(&self, input: &str) -> Cow<'_, str> {
+        match Self::evaluate(input) {
+            Some((FangAction::Defang, _)) => Cow::Borrowed("Defang"),
+            Some((FangAction::Refang, _)) => Cow::Borrowed("Refang"),
+            None => Cow::Borrowed(self.short_name()),
         }
-        None
+    }
+
+    fn transform_text(&self, input: &str,_vt_key: Option<&str>, _abuse_key: Option<&str>) -> Option<TransformerResult> {
+        Self::evaluate(input).map(|(_, text)| TransformerResult::Text(text))
+    }
+}
+
+// ==========================================
+// 1b. SAFE LINK UNWRAP (Microsoft Safe Links, Proofpoint, ...)
+// ==========================================
+pub struct SafeLinkUnwrapTransformer;
+impl Transformer for SafeLinkUnwrapTransformer {
+    fn name(&self) -> &str { "Unwrap Safe Links" }
+    fn short_name(&self) -> &str { "Unwrap" }
+
+    // Only offered when the text actually holds a link we know how to unwrap.
+    fn is_applicable_to_text(&self, input: &str) -> bool {
+        crate::safelinks::contains_wrapped(input)
+    }
+
+    fn transform_text(&self, input: &str,_vt_key: Option<&str>, _abuse_key: Option<&str>) -> Option<TransformerResult> {
+        crate::safelinks::unwrap_all(input).map(TransformerResult::Text)
     }
 }
 

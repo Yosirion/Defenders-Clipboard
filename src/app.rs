@@ -10,7 +10,7 @@ use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 use winreg::RegKey;
 use serde::{Deserialize, Serialize};
 
-use crate::clipboard_listener::{GUI_CONTEXT, WINDOW_VISIBLE};
+use crate::clipboard_listener::{GUI_CONTEXT, OPEN_AT_CURSOR, WINDOW_VISIBLE};
 use crate::events::{AppEvent, ClipboardImage, HotkeyConfig, ListenerCommand};
 use crate::transformers::TransformationManager;
 use crate::api::{classify_indicator, IndicatorType, VtStatus, AbuseStatus};
@@ -137,12 +137,16 @@ struct AppConfig {
 
     #[serde(default = "default_history_limit")]
     history_limit: usize,
+
+    #[serde(default = "default_open_at_cursor")]
+    open_at_cursor: bool,
 }
 
 // Default fallbacks used by Serde if fields are missing from the YAML file
 fn default_window_width() -> f32 { 360.0 }
 fn default_window_height() -> f32 { 380.0 }
 fn default_history_limit() -> usize { 10 }
+fn default_open_at_cursor() -> bool { true }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -154,6 +158,7 @@ impl Default for AppConfig {
             window_width: default_window_width(),
             window_height: default_window_height(),
             history_limit: default_history_limit(),
+            open_at_cursor: default_open_at_cursor(),
         }
     }
 }
@@ -209,6 +214,7 @@ pub struct ClipboardApp {
     window_width: f32,
     window_height: f32,
     history_limit: usize,
+    open_at_cursor: bool,
     focus_search_next_frame: bool,
     wake_up_time: Option<Instant>, 
 }
@@ -256,6 +262,9 @@ impl ClipboardApp {
             // Apply the loaded hotkey immediately by broadcasting a command to the Win32 Listener
             let _ = cmd_tx.send(ListenerCommand::UpdateHotkey(config.hotkey.clone()));
 
+            // Tell the Win32 listener where the window should open
+            OPEN_AT_CURSOR.store(config.open_at_cursor, std::sync::atomic::Ordering::SeqCst);
+
             // --- LOAD AUTOSTART STATE FROM REGISTRY ---
             let start_with_windows = Self::is_autostart_enabled();
 
@@ -297,6 +306,7 @@ impl ClipboardApp {
                 window_width: config.window_width,
                 window_height: config.window_height,
                 history_limit: config.history_limit,
+                open_at_cursor: config.open_at_cursor,
             }
         }
 
@@ -339,6 +349,7 @@ impl ClipboardApp {
             window_width: self.window_width,
             window_height: self.window_height,
             history_limit: self.history_limit,
+            open_at_cursor: self.open_at_cursor,
         };
 
         // Serialize to YAML and write securely to the absolute path
@@ -447,6 +458,13 @@ impl ClipboardApp {
         self.insert_history_item(item);
     }
 
+    /// Hides the window (same state changes as after clicking an entry to paste it).
+    fn hide_window(&mut self, ctx: &egui::Context) {
+        WINDOW_VISIBLE.store(false, std::sync::atomic::Ordering::SeqCst);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        self.search_query.clear();
+    }
+
     // --- FEEDBACK TOAST HANDLERS ---
     fn set_feedback_success(&mut self, msg: String) {
         self.last_action = Some((msg, false));
@@ -549,6 +567,8 @@ impl eframe::App for ClipboardApp {
                         self.last_copied_hash = Some(Self::calculate_hash(&result_text)); 
                         if self.clipboard.set_text(result_text).is_ok() {
                             self.set_feedback_success(format!("Copied ({action_name})!"));
+                            // The result is already in the clipboard: get out of the way
+                            self.hide_window(ctx);
                         } else {
                             self.set_feedback_error("Error during copy.".to_string());
                         }
@@ -558,6 +578,8 @@ impl eframe::App for ClipboardApp {
                 AppEvent::TransformerResultBrowser(action_name, url) => {
                     if open::that(&url).is_ok() {
                         self.set_feedback_success(format!("Opened {} in Browser!", action_name));
+                        // The browser takes over: hide the clipboard like after a paste
+                        self.hide_window(ctx);
                     } else {
                         self.set_feedback_error("Failed to open browser.".to_string());
                     }
@@ -756,6 +778,14 @@ impl eframe::App for ClipboardApp {
                                 settings_changed = true;
                             }
                         });
+
+                        if ui.checkbox(&mut self.open_at_cursor, "Open under the mouse pointer")
+                             .on_hover_text("Opens on the monitor where the pointer is. When off, it opens centered on the primary monitor.")
+                             .changed()
+                        {
+                            OPEN_AT_CURSOR.store(self.open_at_cursor, std::sync::atomic::Ordering::SeqCst);
+                            settings_changed = true;
+                        }
 
                         if settings_changed {
                             self.save_settings(); 
@@ -1241,7 +1271,7 @@ impl eframe::App for ClipboardApp {
                                                     // DYNAMIC UI LOGIC: Let the Transformer dictate its visibility rules!
                                                     let mut show_btn = true;
                                                     
-                                                    if let HistoryPayload::Text(_) = &item.payload {
+                                                    if let HistoryPayload::Text(text) = &item.payload {
                                                         // No point showing a public-lookup tool for a private/internal IP
                                                         if item.indicator_type == IndicatorType::InternalIp && transformer.requires_external_lookup() {
                                                             show_btn = false;
@@ -1250,14 +1280,22 @@ impl eframe::App for ClipboardApp {
                                                         else if !transformer.is_supported_indicator(&item.indicator_type) {
                                                             show_btn = false;
                                                         }
+                                                        // Hide tools that have nothing to do on this specific text (e.g. Unwrap without a safe link)
+                                                        else if !transformer.is_applicable_to_text(text) {
+                                                            show_btn = false;
+                                                        }
                                                     }
 
                                                     if show_btn {
-                                                        let short = transformer.short_name();
+                                                        // The label may depend on the content (Fang -> Defang / Refang)
+                                                        let short = match &item.payload {
+                                                            HistoryPayload::Text(text) => transformer.short_name_for_text(text),
+                                                            HistoryPayload::Image { .. } => std::borrow::Cow::Borrowed(transformer.short_name()),
+                                                        };
                                                         // Ask the transformer for its preferred button width
                                                         let btn_size = egui::vec2(transformer.button_width(), 22.0);
 
-                                                        if ui.add_sized(btn_size, egui::Button::new(short)).on_hover_text(label).clicked() {
+                                                        if ui.add_sized(btn_size, egui::Button::new(short.as_ref())).on_hover_text(label).clicked() {
                                                             
                                                             let tx = self.event_tx.clone();
                                                             let action_name = label.to_string();

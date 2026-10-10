@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -7,7 +7,10 @@ use std::os::windows::ffi::OsStringExt;
 use sha2::{Sha256, Digest};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM, POINT};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, RemoveClipboardFormatListener,
 };
@@ -23,12 +26,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_MESSAGE, MSG, WNDCLASSW,
     WM_CREATE, WM_DESTROY, WM_HOTKEY, WS_OVERLAPPEDWINDOW, WM_CLIPBOARDUPDATE,
     FindWindowW, ShowWindow, SW_HIDE, SW_SHOW, 
-    GetCursorPos, SetWindowPos, HWND_TOPMOST, SWP_NOSIZE,
+    GetCursorPos, GetWindowRect, SetWindowPos, HWND_TOPMOST, SWP_NOSIZE,
     WM_APP, WM_COMMAND, WM_RBUTTONUP, WM_LBUTTONUP, WM_QUIT,
     CreatePopupMenu, AppendMenuW, TrackPopupMenu, DestroyMenu,
     MF_STRING, TPM_RIGHTBUTTON, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     LoadIconW, IDI_APPLICATION,
-    GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN,
     SetWindowLongW, GetWindowLongW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
     PostQuitMessage, GetForegroundWindow
 };
@@ -51,6 +53,10 @@ pub static GUI_CONTEXT: OnceLock<eframe::egui::Context> = OnceLock::new();
 
 // Keeps track of the logical visibility of the UI window
 pub static WINDOW_VISIBLE: AtomicBool = AtomicBool::new(true);
+
+// Where the window opens: next to the mouse pointer (true) or centered on the primary monitor.
+// Kept in sync with the "open at cursor" setting by the GUI.
+pub static OPEN_AT_CURSOR: AtomicBool = AtomicBool::new(true);
 
 static CLIPBOARD_READER: OnceLock<Mutex<Clipboard>> = OnceLock::new();
 
@@ -192,6 +198,73 @@ pub fn simulate_paste() {
     }
 }
 
+
+/// Moves the window where it should open: just below the mouse pointer on whichever
+/// monitor the pointer is (default), or centered on the primary monitor. Either way it
+/// is kept inside the monitor's work area (so never under the taskbar or off-screen),
+/// and the window's real size is used rather than a hardcoded one.
+unsafe fn place_window(hwnd: HWND) {
+    let at_cursor = OPEN_AT_CURSOR.load(Ordering::SeqCst);
+
+    let mut cursor = POINT::default();
+    let _ = GetCursorPos(&mut cursor);
+
+    let (anchor, flags) = if at_cursor {
+        (cursor, MONITOR_DEFAULTTONEAREST)
+    } else {
+        (POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY)
+    };
+    let monitor = MonitorFromPoint(anchor, flags);
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !GetMonitorInfoW(monitor, &mut info).as_bool() { return; }
+    let work = info.rcWork;
+
+    // Moving to a monitor with a different DPI rescales the window, so the size is
+    // measured again after the first move and the position fixed up if it changed.
+    let mut last_size = (0, 0);
+    for _ in 0..2 {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() { return; }
+        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+        if (w, h) == last_size { break; }
+        last_size = (w, h);
+
+        let (x, y) = compute_position(
+            (work.left, work.top, work.right, work.bottom),
+            (cursor.x, cursor.y),
+            (w, h),
+            at_cursor,
+        );
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE);
+    }
+}
+
+/// Pure placement math (no Win32), so it can be unit-tested.
+/// `work` is (left, top, right, bottom) of the monitor's work area, `size` the window's (w, h).
+/// Returns the top-left corner: at the pointer (flipped above it when there's no room
+/// below) or centered, and in both cases kept fully inside `work` (the left/top edge wins
+/// if the window is bigger than the area).
+fn compute_position(
+    work: (i32, i32, i32, i32),
+    cursor: (i32, i32),
+    size: (i32, i32),
+    at_cursor: bool,
+) -> (i32, i32) {
+    let (left, top, right, bottom) = work;
+    let (w, h) = size;
+
+    let (x, y) = if at_cursor {
+        let y = if cursor.1 + h > bottom { cursor.1 - h } else { cursor.1 };
+        (cursor.0, y)
+    } else {
+        (left + (right - left - w) / 2, top + (bottom - top - h) / 2)
+    };
+
+    (x.min(right - w).max(left), y.min(bottom - h).max(top))
+}
+
+#[cfg(test)]
+mod tests;
 
 unsafe fn run_message_loop() {
     let class_name: Vec<u16> = "DefendersClipboardListener\0".encode_utf16().collect();
@@ -350,9 +423,7 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                                 let title: Vec<u16> = "Defenders Clipboard\0".encode_utf16().collect();
                                 
                                 if let Ok(egui_hwnd) = FindWindowW(None, PCWSTR(title.as_ptr())) {
-                                    let screen_w = GetSystemMetrics(SM_CXSCREEN);
-                                    let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                                    let _ = SetWindowPos(egui_hwnd, HWND_TOPMOST, (screen_w - 360) / 2, (screen_h - 380) / 2, 0, 0, SWP_NOSIZE);
+                                    place_window(egui_hwnd);
                                     let _ = ShowWindow(egui_hwnd, SW_SHOW);
                                 }
                             }
@@ -404,14 +475,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus); 
                         }
 
-                        let screen_w = GetSystemMetrics(SM_CXSCREEN);
-                        let screen_h = GetSystemMetrics(SM_CYSCREEN);
-                        let x = (screen_w - 360) / 2; 
-                        let y = (screen_h - 380) / 2; 
+                        place_window(egui_hwnd);
 
-                        let _ = SetWindowPos(egui_hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE);
-                        
-                        
                         let _ = ShowWindow(egui_hwnd, windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
                         let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(egui_hwnd);
                     } else {

@@ -8,4 +8,5 @@ pub mod api;
 pub mod app;
 pub mod clipboard_listener;
 pub mod events;
+pub mod safelinks;
 pub mod transformers;
